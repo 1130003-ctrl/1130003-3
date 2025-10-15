@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>點擊打怪英雄</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+    <!-- Load Firebase Modules -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Expose Firebase objects globally for use in the main script block
+        window.Firebase = {
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
+            getFirestore, doc, setDoc, onSnapshot, setLogLevel
+        };
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a202c; /* Dark theme background */
+            color: #e2e8f0;
+        }
+        /* Custom progress bar styles */
+        #monster-hp-bar-inner {
+            transition: width 0.1s ease-out;
+        }
+        /* Custom glow for the monster */
+        #monster-icon {
+            filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.8));
+            transition: transform 0.1s;
+        }
+        #monster-icon.hit {
+            transform: scale(1.05);
+        }
+        /* Click feedback animation */
+        .damage-popup {
+            position: absolute;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #ef4444; /* Red color for damage */
+            animation: floatup 0.8s ease-out forwards;
+            pointer-events: none; /* Allows clicks to go through */
+        }
+        @keyframes floatup {
+            0% { transform: translateY(0); opacity: 1; }
+            100% { transform: translateY(-50px); opacity: 0; }
+        }
+        /* Button pulse effect */
+        .btn-attack:hover {
+            box-shadow: 0 0 15px rgba(234, 179, 8, 0.8);
+        }
+        .btn-upgrade:hover {
+            box-shadow: 0 0 15px rgba(59, 130, 246, 0.8);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4">
+
+    <!-- Loading Screen -->
+    <div id="loading-screen" class="absolute inset-0 bg-gray-900 bg-opacity-95 flex flex-col items-center justify-center z-50 transition-opacity duration-500">
+        <svg class="animate-spin h-10 w-10 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <p class="mt-4 text-lg text-yellow-400">載入英雄數據中...</p>
+    </div>
+
+    <!-- Main Game Container -->
+    <div id="game-container" class="w-full max-w-xl bg-gray-800 p-6 rounded-xl shadow-2xl space-y-6 opacity-0 transition-opacity duration-500">
+
+        <!-- Header: Stats -->
+        <div class="flex justify-between items-center text-xl font-bold border-b border-gray-700 pb-4">
+            <div class="flex items-center space-x-2">
+                <!-- Gold Icon (Coin SVG) -->
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-yellow-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 0 9.8 8.6c.1 1.2-.8 2.3-2 2.4-1.2.1-2.3-.8-2.4-2-.1-1.2.8-2.3 2-2.4-.1-1.2-.8-2.3-2-2.4-1.2-.1-2.3.8-2.4 2-.1 1.2.8 2.3 2 2.4"/><path d="M15 6.5l-3 3-3-3"/></svg>
+                <span>金幣: <span id="gold-count" class="text-yellow-400">0</span></span>
+            </div>
+            <div class="flex items-center space-x-2">
+                <!-- ATK Icon (Sword SVG) -->
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.49 0-2.85.96-3.96 2.22l-7.13 8.32a1 1 0 0 0-.17 1.09l.86 1.55a1 1 0 0 0 1.03.54L13.5 15h2c.71 0 1.39-.31 1.83-.84l1.64-1.92z"/><path d="M16 17l4 4"/><path d="M12.5 15.5l-7.39 7.39a1 1 0 0 1-1.41-1.41L11.09 14.09"/></svg>
+                <span>攻擊力: <span id="player-atk" class="text-red-500">1</span></span>
+            </div>
+        </div>
+
+        <!-- Monster Display Area -->
+        <div id="monster-area" class="flex flex-col items-center justify-center p-6 bg-gray-900 rounded-lg shadow-inner border border-gray-700 relative">
+            
+            <!-- Monster Level -->
+            <p class="text-2xl font-extrabold text-gray-400 mb-2">
+                怪物等級 <span id="monster-level" class="text-red-400">1</span>
+            </p>
+
+            <!-- Monster Icon (Skull SVG) -->
+            <svg id="monster-icon" class="h-40 w-40 text-red-600 mb-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 10c0-1.87-1.43-3.41-3.21-3.5a5.53 5.53 0 0 0-9.58 0C6.43 6.59 5 8.13 5 10c0 2 1.3 3.68 3 4.5V22c.5 1.5 2 2 4 2s3.5-.5 4-2v-7.5c1.7-0.82 3-2.5 3-4.5zM8 12h8m-4 4h0"/>
+                <path d="M9 10a1 1 0 1 0 0.01-0.01A1 1 0 0 0 9 10zm6 0a1 1 0 1 0 0.01-0.01A1 1 0 0 0 15 10z"/>
+            </svg>
+            
+            <!-- Monster HP Bar -->
+            <div class="w-full h-8 bg-gray-700 rounded-full border-2 border-red-500 overflow-hidden">
+                <div id="monster-hp-bar-inner" class="h-full bg-red-600 flex items-center justify-center" style="width: 100%;">
+                    <span id="monster-hp-text" class="text-sm font-bold text-white mix-blend-difference">10 / 10 HP</span>
+                </div>
+            </div>
+            
+            <!-- Gold Reward Text -->
+            <p class="text-lg text-yellow-300 mt-2">
+                擊敗獎勵: <span id="monster-reward-gold">5</span> 金幣
+            </p>
+        </div>
+
+        <!-- Main Attack Button -->
+        <div class="flex justify-center">
+            <button id="attack-button" class="btn-attack w-full py-4 px-6 bg-yellow-500 text-gray-900 text-2xl font-black rounded-xl transition transform hover:scale-[1.01] active:scale-[0.98] shadow-lg shadow-yellow-700/50">
+                攻擊怪物！
+            </button>
+        </div>
+
+        <!-- Upgrade Section -->
+        <div class="pt-4 border-t border-gray-700">
+            <h3 class="text-xl font-bold text-blue-400 mb-3">英雄強化</h3>
+            <div class="flex space-x-4">
+                <button id="upgrade-button" class="btn-upgrade w-full py-3 px-4 bg-blue-600 text-white font-bold rounded-xl transition transform hover:scale-[1.01] active:scale-[0.98] shadow-lg shadow-blue-800/50 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                    提升攻擊力 (+1 ATK)
+                </button>
+            </div>
+            <p id="upgrade-cost" class="text-center text-sm mt-2 text-blue-300">
+                花費: 10 金幣
+            </p>
+        </div>
+
+        <!-- Debug/User Info -->
+        <div class="text-xs text-gray-500 pt-4 border-t border-gray-700">
+            <p>用戶 ID (用於儲存): <span id="user-id-display">正在驗證...</span></p>
+            <p>狀態: <span id="status-message" class="text-green-400">載入中...</span></p>
+        </div>
+    </div>
+
+    <script>
+        // --- Game State Variables ---
+        let db, auth;
+        let userId = 'loading';
+        let gameRef;
+
+        /** Safely converts a value from Firestore (number or string) to BigInt. */
+        const toBigInt = (value) => {
+            if (typeof value === 'string') {
+                try {
+                    return BigInt(value);
+                } catch {
+                    return 0n;
+                }
+            }
+            if (typeof value === 'number') {
+                // If it's a regular number, convert it safely 
+                return BigInt(Math.floor(value));
+            }
+            if (typeof value === 'bigint') {
+                return value;
+            }
+            return 0n;
+        };
+        
+        let state = {
+            // 設定金幣為 BigInt 無窮大 (接近最大值)，BigInt 結尾使用 n
+            gold: 9999999999999999n, 
+            // 根據使用者要求，設定攻擊力為 10^27 (十澗/一千秭)
+            playerAtk: 1000000000000000000000000000n, 
+            currentMonsterLevel: 1n, // 使用 BigInt 維持類型一致性
+            currentMonsterHP: 10n,
+            maxMonsterHP: 10n,
+        };
+
+        const UPGRADE_BASE_COST = 10n; // BigInt
+        const UPGRADE_COST_MULTIPLIER = 1.5; // Float for Math.pow calculation
+        const MONSTER_HP_BASE = 10n; // BigInt
+        const MONSTER_HP_MULTIPLIER = 1.3; // Float
+        const MONSTER_REWARD_BASE = 5n; // BigInt
+        const MONSTER_REWARD_MULTIPLIER = 1.2; // Float
+
+        // --- DOM Elements ---
+        const goldCountEl = document.getElementById('gold-count');
+        const playerAtkEl = document.getElementById('player-atk');
+        const monsterLevelEl = document.getElementById('monster-level');
+        const monsterHPCurrentEl = document.getElementById('monster-hp-text');
+        const monsterHPBarInnerEl = document.getElementById('monster-hp-bar-inner');
+        const monsterRewardEl = document.getElementById('monster-reward-gold');
+        const attackButton = document.getElementById('attack-button');
+        const upgradeButton = document.getElementById('upgrade-button');
+        const upgradeCostEl = document.getElementById('upgrade-cost');
+        const statusMessageEl = document.getElementById('status-message');
+        const userIdDisplayEl = document.getElementById('user-id-display');
+        const monsterIconEl = document.getElementById('monster-icon');
+        const gameContainerEl = document.getElementById('game-container');
+        const loadingScreenEl = document.getElementById('loading-screen');
+
+        // --- Utility Functions ---
+
+        /** Calculates the cost for the next ATK upgrade, handling BigInts. */
+        const getUpgradeCost = (currentAtk) => {
+            // JavaScript's safe integer limit is 2^53 - 1. If currentAtk exceeds this, 
+            // Number(currentAtk) becomes Infinity, leading to Math.pow returning Infinity.
+            // Since we use BigInt for large numbers, we must handle this cap explicitly。
+            const SAFE_MAX_ATK_FOR_CALC = 9007199254740991n; // BigInt version of Number.MAX_SAFE_INTEGER
+            
+            if (currentAtk > SAFE_MAX_ATK_FOR_CALC) {
+                // For extremely high ATK values, return a token cost (since gold is infinite anyway) 
+                // to prevent RangeError from BigInt(Infinity).
+                return 100n; 
+            }
+            
+            // currentAtk is BigInt, must convert to Number for Math.pow and UPGRADE_COST_MULTIPLIER
+            const multiplier = Math.pow(UPGRADE_COST_MULTIPLIER, Number(currentAtk) - 1);
+            return BigInt(Math.floor(Number(UPGRADE_BASE_COST) * multiplier));
+        };
+
+        /** Calculates Monster stats based on level, handling BigInts. */
+        const getMonsterStats = (level) => {
+            // level is BigInt, must convert to Number for Math.pow
+            const multiplierHP = Math.pow(MONSTER_HP_MULTIPLIER, Number(level) - 1);
+            const maxHP = BigInt(Math.floor(Number(MONSTER_HP_BASE) * multiplierHP));
+            
+            const multiplierReward = Math.pow(MONSTER_REWARD_MULTIPLIER, Number(level) - 1);
+            const reward = BigInt(Math.floor(Number(MONSTER_REWARD_BASE) * multiplierReward));
+            
+            return { maxHP, reward };
+        };
+
+        /** Updates the visual display based on the current game state */
+        const updateUI = () => {
+            const infiniteGoldThreshold = 9999999999999990n; // Use BigInt for threshold
+
+            // 金幣顯示邏輯：如果金幣在無窮門檻之上，則顯示 ∞
+            if (state.gold > infiniteGoldThreshold) {
+                goldCountEl.textContent = '∞ (無窮)';
+            } else {
+                // BigInt.toLocaleString() for large number formatting
+                goldCountEl.textContent = state.gold.toLocaleString();
+            }
+            
+            playerAtkEl.textContent = state.playerAtk.toLocaleString();
+            monsterLevelEl.textContent = state.currentMonsterLevel.toLocaleString();
+            
+            // Recalculate reward based on current level (even if stats were loaded)
+            monsterRewardEl.textContent = getMonsterStats(state.currentMonsterLevel).reward.toLocaleString();
+            
+            // HP Bar Update: Use BigInt arithmetic for precision
+            let hpPercent;
+            if (state.maxMonsterHP === 0n) {
+                hpPercent = 100;
+            } else {
+                // Calculate percentage using BigInt multiplication and division (returns integer)
+                // We use Number() on the result to satisfy CSS style property
+                hpPercent = Number((state.currentMonsterHP * 100n) / state.maxMonsterHP);
+            }
+            
+            monsterHPBarInnerEl.style.width = `${hpPercent}%`;
+            monsterHPCurrentEl.textContent = `${state.currentMonsterHP.toLocaleString()} / ${state.maxMonsterHP.toLocaleString()} HP`;
+
+            // Upgrade Button Update
+            const nextCost = getUpgradeCost(state.playerAtk);
+            upgradeCostEl.textContent = `花費: ${nextCost.toLocaleString()} 金幣`;
+
+            // Comparison must be between BigInts
+            const canUpgrade = state.gold >= nextCost;
+            upgradeButton.disabled = !canUpgrade;
+            upgradeButton.textContent = canUpgrade ? 
+                `提升攻擊力 (+1 ATK)` : 
+                `金幣不足 (${nextCost.toLocaleString()})`;
+            
+            // Enable/Disable Attack Button based on HP (BigInt comparison)
+            attackButton.disabled = state.currentMonsterHP <= 0n;
+            attackButton.textContent = attackButton.disabled ? '怪物已被擊敗!' : '攻擊怪物！';
+        };
+
+        /** Displays a damage popup effect */
+        const showDamagePopup = (damage, element) => {
+            const popup = document.createElement('div');
+            // Show damage in scientific notation or short form if it's too large
+            let damageText;
+            
+            // Damage is BigInt
+            if (damage > 1000000n) { 
+                 // For very large BigInts, format to scientific notation (e.g., 1.00E+27)
+                const damageString = damage.toString();
+                const exponent = damageString.length - 1;
+                const leadingDigits = damageString.substring(0, 3);
+                damageText = `${leadingDigits.slice(0, 1)}.${leadingDigits.slice(1)}E+${exponent}`;
+            } else {
+                // Use default formatting for smaller BigInts
+                damageText = damage.toLocaleString();
+            }
+
+            popup.textContent = damageText;
+            popup.classList.add('damage-popup', 'font-mono');
+            
+            // Position near the monster icon
+            const rect = element.getBoundingClientRect();
+            popup.style.top = `${rect.top + rect.height / 2 - 20}px`;
+            popup.style.left = `${rect.left + rect.width / 2}px`;
+
+            document.body.appendChild(popup);
+            
+            setTimeout(() => {
+                popup.remove();
+            }, 800);
+        };
+
+        // --- Core Game Logic ---
+
+        /** Handles the attack action */
+        const handleAttack = async () => {
+            if (!db || state.currentMonsterHP <= 0n) return;
+
+            const damage = state.playerAtk;
+            const newHP = state.currentMonsterHP - damage; // BigInt subtraction
+            // Ensure HP doesn't go below zero
+            let updates = { currentMonsterHP: newHP > 0n ? newHP : 0n }; 
+
+            // Visual feedback
+            showDamagePopup(damage, monsterIconEl);
+            monsterIconEl.classList.add('hit');
+            setTimeout(() => monsterIconEl.classList.remove('hit'), 100);
+
+            // Check for defeat
+            if (updates.currentMonsterHP === 0n) {
+                const monsterStats = getMonsterStats(state.currentMonsterLevel);
+                const goldReward = monsterStats.reward;
+
+                // Defeat message
+                statusMessageEl.textContent = `太棒了! 擊敗了等級 ${state.currentMonsterLevel.toLocaleString()} 的怪物! 獲得 ${goldReward.toLocaleString()} 金幣!`;
+                
+                // Advance to next monster
+                const nextLevel = state.currentMonsterLevel + 1n; // BigInt addition
+                const nextStats = getMonsterStats(nextLevel);
+
+                // Update stats
+                updates.gold = state.gold + goldReward; // BigInt addition
+                updates.currentMonsterLevel = nextLevel;
+                updates.maxMonsterHP = nextStats.maxHP;
+                updates.currentMonsterHP = nextStats.maxHP;
+            } else {
+                statusMessageEl.textContent = `造成 ${damage.toLocaleString()} 點傷害。怪物剩餘 ${updates.currentMonsterHP.toLocaleString()} HP。`;
+            }
+
+            // Save state to Firestore - Convert BigInts to Strings before saving
+            const firestoreUpdates = {};
+            for (const key in updates) {
+                const value = updates[key];
+                if (typeof value === 'bigint') {
+                    firestoreUpdates[key] = value.toString();
+                } else {
+                    firestoreUpdates[key] = value;
+                }
+            }
+
+            try {
+                // Use Firebase.setDoc as setDoc is not globally scoped
+                await Firebase.setDoc(gameRef, firestoreUpdates, { merge: true });
+            } catch (error) {
+                console.error("Error updating game state:", error);
+                statusMessageEl.textContent = "錯誤: 無法儲存進度。";
+            }
+        };
+
+        /** Handles the upgrade action */
+        const handleUpgrade = async () => {
+            if (!db) return;
+
+            const cost = getUpgradeCost(state.playerAtk);
+            if (state.gold < cost) return; // BigInt comparison
+
+            // Prepare updates
+            const newGold = state.gold - cost; // BigInt subtraction
+            const newAtk = state.playerAtk + 1n; // BigInt addition
+            
+            statusMessageEl.textContent = `恭喜! 攻擊力提升至 ${newAtk.toLocaleString()}。`;
+
+            // Save state to Firestore - Convert BigInts to Strings
+            try {
+                // Use Firebase.setDoc as setDoc is not globally scoped
+                await Firebase.setDoc(gameRef, { 
+                    gold: newGold.toString(), 
+                    playerAtk: newAtk.toString() 
+                }, { merge: true });
+            } catch (error) {
+                console.error("Error updating ATK:", error);
+                statusMessageEl.textContent = "錯誤: 無法提升攻擊力。";
+            }
+        };
+
+        // --- Firebase/App Initialization ---
+
+        const initializeFirebase = async () => {
+            // Check for environment variables
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+            if (!firebaseConfig) {
+                console.error("Firebase configuration not found.");
+                statusMessageEl.textContent = "錯誤: Firebase 配置遺失。無法儲存。";
+                loadingScreenEl.classList.add('opacity-0', 'pointer-events-none');
+                gameContainerEl.classList.add('opacity-100');
+                return;
+            }
+
+            try {
+                // 1. Init Firebase and Services
+                const app = Firebase.initializeApp(firebaseConfig);
+                db = Firebase.getFirestore(app);
+                auth = Firebase.getAuth(app);
+                Firebase.setLogLevel('Debug'); // Enable debug logging
+
+                // 2. Auth
+                if (initialAuthToken) {
+                    await Firebase.signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await Firebase.signInAnonymously(auth);
+                }
+
+                // 3. Auth State Listener (Critical for setting up data listener)
+                Firebase.onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        userIdDisplayEl.textContent = userId;
+                        statusMessageEl.textContent = "已連線並驗證。";
+                        
+                        // 4. Set up Firestore data listener
+                        const collectionPath = `artifacts/${appId}/users/${userId}/game_data`;
+                        gameRef = Firebase.doc(db, collectionPath, 'monster_slayer');
+                        
+                        Firebase.onSnapshot(gameRef, (docSnap) => {
+                            if (docSnap.exists()) {
+                                // Data exists, load it
+                                const loadedState = docSnap.data();
+                                
+                                // Convert loaded strings back to BigInts
+                                const currentLevel = toBigInt(loadedState.currentMonsterLevel) || 1n;
+                                
+                                state.playerAtk = toBigInt(loadedState.playerAtk) || state.playerAtk;
+                                state.gold = toBigInt(loadedState.gold) || state.gold;
+                                
+                                // Recalculate monster stats based on loaded level to ensure HP is up-to-date
+                                const currentStats = getMonsterStats(currentLevel);
+                                state.currentMonsterLevel = currentLevel;
+                                state.maxMonsterHP = currentStats.maxHP;
+                                state.currentMonsterHP = toBigInt(loadedState.currentMonsterHP) || currentStats.maxHP;
+
+                                statusMessageEl.textContent = "英雄數據已載入。開始戰鬥吧!";
+                            } else {
+                                // No data, initialize the document
+                                const initialMonsterStats = getMonsterStats(state.currentMonsterLevel);
+                                
+                                // Convert BigInts to String for initial save
+                                const initialData = {
+                                    gold: state.gold.toString(),
+                                    playerAtk: state.playerAtk.toString(),
+                                    currentMonsterLevel: state.currentMonsterLevel.toString(),
+                                    maxMonsterHP: initialMonsterStats.maxHP.toString(),
+                                    currentMonsterHP: initialMonsterStats.maxHP.toString(),
+                                };
+
+                                // Set doc with string values
+                                Firebase.setDoc(gameRef, initialData).then(() => {
+                                    // Update state with BigInt values after successful save
+                                    state = { 
+                                        gold: toBigInt(initialData.gold),
+                                        playerAtk: toBigInt(initialData.playerAtk),
+                                        currentMonsterLevel: toBigInt(initialData.currentMonsterLevel),
+                                        maxMonsterHP: toBigInt(initialData.maxMonsterHP),
+                                        currentMonsterHP: toBigInt(initialData.currentMonsterHP),
+                                    };
+                                    statusMessageEl.textContent = "新英雄已創建。";
+                                }).catch(e => {
+                                    console.error("Error initializing document:", e);
+                                    statusMessageEl.textContent = "錯誤: 無法初始化遊戲資料。";
+                                });
+                            }
+                            // Always update UI after state change
+                            updateUI();
+                            // Hide loading screen after first data load/init
+                            loadingScreenEl.classList.remove('opacity-100');
+                            loadingScreenEl.classList.add('opacity-0', 'pointer-events-none');
+                            gameContainerEl.classList.add('opacity-100');
+                        }, (error) => {
+                            console.error("Firestore snapshot error:", error);
+                            statusMessageEl.textContent = "錯誤: Firestore 連線失敗。";
+                        });
+
+                    } else {
+                        // User logged out or failed to log in
+                        userId = 'anonymous';
+                        userIdDisplayEl.textContent = userId + ' (匿名)';
+                        statusMessageEl.textContent = "匿名登入失敗或登出。無法儲存。";
+                    }
+                });
+            } catch (error) {
+                console.error("Firebase Initialization Error:", error);
+                statusMessageEl.textContent = "致命錯誤: Firebase 初始化失敗。";
+                loadingScreenEl.classList.add('opacity-0', 'pointer-events-none');
+                gameContainerEl.classList.add('opacity-100');
+            }
+        };
+
+        // --- Event Listeners ---
+        attackButton.addEventListener('click', handleAttack);
+        upgradeButton.addEventListener('click', handleUpgrade);
+
+        // Start the application when the window loads
+        window.onload = initializeFirebase;
+    </script>
+</body>
+</html>
